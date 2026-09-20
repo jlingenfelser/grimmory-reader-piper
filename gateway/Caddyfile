@@ -1,0 +1,11 @@
+{$SITE_ADDRESS} {
+    encode zstd gzip
+
+    handle_path /tts/* {
+        reverse_proxy piper:5000
+    }
+
+    handle {
+        reverse_proxy booklore:6060
+    }
+}

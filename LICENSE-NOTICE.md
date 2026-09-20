@@ -1,0 +1,1 @@
+This project is an overlay around Grimmory and Piper. Grimmory is licensed AGPL-3.0. Piper/piper-tts-web and their models/assets have their own upstream licenses. Preserve upstream notices when redistributing built images.

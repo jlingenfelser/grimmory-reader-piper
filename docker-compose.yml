@@ -1,0 +1,92 @@
+services:
+  booklore:
+    image: ${GRIMMORY_IMAGE:?Set GRIMMORY_IMAGE in .env}
+    container_name: booklore
+    environment:
+      USER_ID: ${APP_USER_ID:-1000}
+      GROUP_ID: ${APP_GROUP_ID:-1000}
+      TZ: ${TZ:-Etc/UTC}
+      DATABASE_URL: jdbc:mariadb://mariadb:3306/${DB_NAME:-booklore}
+      DATABASE_USERNAME: ${DB_USER:-booklore}
+      DATABASE_PASSWORD: ${DB_PASSWORD}
+      DISK_TYPE: LOCAL
+      API_DOCS_ENABLED: "false"
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    volumes:
+      - ${STATE_DIR:-/srv/booklore-reader}/data:/app/data
+      - ${STATE_DIR:-/srv/booklore-reader}/books:/books
+      - ${STATE_DIR:-/srv/booklore-reader}/bookdrop:/bookdrop
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:6060/api/v1/healthcheck >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    restart: unless-stopped
+    networks: [books]
+
+  mariadb:
+    image: lscr.io/linuxserver/mariadb:11.4.5
+    container_name: booklore-mariadb
+    environment:
+      PUID: ${DB_USER_ID:-1000}
+      PGID: ${DB_GROUP_ID:-1000}
+      TZ: ${TZ:-Etc/UTC}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME:-booklore}
+      MYSQL_USER: ${DB_USER:-booklore}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ${STATE_DIR:-/srv/booklore-reader}/mariadb:/config
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+    networks: [books]
+
+  piper:
+    image: ${PIPER_IMAGE:?Set PIPER_IMAGE in .env}
+    container_name: booklore-piper
+    environment:
+      PIPER_VOICE: ${PIPER_VOICE:-en_US-libritts_r-medium}
+      PIPER_SENTENCE_SILENCE: ${PIPER_SENTENCE_SILENCE:-0.40}
+    volumes:
+      - ${STATE_DIR:-/srv/booklore-reader}/piper-data:/voices
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/info', timeout=5).read()"]
+      interval: 15s
+      timeout: 8s
+      retries: 10
+      start_period: 90s
+    restart: unless-stopped
+    networks: [books]
+
+  gateway:
+    image: caddy:2-alpine
+    container_name: booklore-gateway
+    depends_on:
+      booklore:
+        condition: service_healthy
+      piper:
+        condition: service_healthy
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./gateway/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${STATE_DIR:-/srv/booklore-reader}/caddy-data:/data
+      - ${STATE_DIR:-/srv/booklore-reader}/caddy-config:/config
+    restart: unless-stopped
+    networks: [books]
+
+networks:
+  books:
+    driver: bridge
