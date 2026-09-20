@@ -25,7 +25,11 @@ def append_once(text, marker, block):
 pkgf=p("frontend/package.json")
 pkg=json.loads(pkgf.read_text())
 pkg.setdefault("dependencies",{})["piper-tts-web"]="1.1.2"
-pkgf.write_text(json.dumps(pkg,indent=2)+"\n")
+pkgf.write_text(json.dumps(pkg,indent=2)+"\\n")
+# piper-tts-web 1.1.2 does not ship TypeScript declarations.
+# Grimmory's tsconfig.app.json includes src/**/*.d.ts, so provide a local shim.
+piper_types = FRONTEND / "src" / "piper-tts-web.d.ts"
+piper_types.write_text("declare module 'piper-tts-web';\\n")
 
 # Browser-local Piper needs its WASM/runtime files copied into Angular's public tree.
 # Grimmory's angular.json already copies frontend/public/** into the final application.
