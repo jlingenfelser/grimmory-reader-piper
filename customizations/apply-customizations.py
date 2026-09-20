@@ -26,11 +26,23 @@ pkgf=p("frontend/package.json")
 pkg=json.loads(pkgf.read_text())
 pkg.setdefault("dependencies",{})["piper-tts-web"]="1.1.2"
 pkgf.write_text(json.dumps(pkg,indent=2)+"\n")
-(FRONTEND / "src/piper-tts-web.d.ts").write_text(
-    "declare module 'piper-tts-web' {\n"
-    "  export const PiperWebEngine: any;\n"
-    "}\n"
-)
+
+# Browser-local Piper needs its WASM/runtime files copied into Angular's public tree.
+# Grimmory's angular.json already copies frontend/public/** into the final application.
+dockerfile = ROOT / "Dockerfile"
+docker_src = dockerfile.read_text()
+asset_marker = "COPY frontend/ ./frontend/\n"
+asset_copy = """COPY frontend/ ./frontend/
+RUN mkdir -p frontend/public/onnx frontend/public/piper frontend/public/worker && \\
+    cp -R frontend/node_modules/piper-tts-web/dist/onnx/. frontend/public/onnx/ && \\
+    cp -R frontend/node_modules/piper-tts-web/dist/piper/. frontend/public/piper/ && \\
+    cp -R frontend/node_modules/piper-tts-web/dist/worker/. frontend/public/worker/
+"""
+if "frontend/public/onnx" not in docker_src:
+    if asset_marker not in docker_src:
+        raise SystemExit("Upstream changed: could not find frontend Docker COPY anchor")
+    docker_src = docker_src.replace(asset_marker, asset_copy, 1)
+dockerfile.write_text(docker_src)
 
 # Selection popup: Read aloud
 f=p("frontend/src/app/features/readers/ebook-reader/shared/selection-popup.component.ts")
@@ -49,9 +61,24 @@ f.write_text(s)
 f=p("frontend/src/app/features/readers/ebook-reader/shared/selection-popup.component.html")
 s=f.read_text()
 if '(click)="onReadAloud()"' not in s:
-    anchor='    <div class="divider"></div>\n    <div class="annotation-container">'
-    ins='    <div class="divider"></div>\n    <button class="action-btn" (click)="onReadAloud()" title="Read aloud">\n      <app-reader-icon name="play" [size]="16"></app-reader-icon>\n    </button>\n\n    <div class="divider"></div>\n    <div class="annotation-container">'
-    s=replace_once(s,anchor,ins,"selection annotation container")
+    # Match structurally instead of depending on exact upstream whitespace.
+    pattern = (
+        r'(?P<indent>[ \t]*)<div class="divider"></div>\s*'
+        r'(?P=indent)<div class="annotation-container">'
+    )
+    def _insert_read_aloud(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        return (
+            f'{indent}<div class="divider"></div>\n'
+            f'{indent}<button class="action-btn" (click)="onReadAloud()" title="Read aloud">\n'
+            f'{indent}  <app-reader-icon name="play" [size]="16"></app-reader-icon>\n'
+            f'{indent}</button>\n\n'
+            f'{indent}<div class="divider"></div>\n'
+            f'{indent}<div class="annotation-container">'
+        )
+    s, count = re.subn(pattern, _insert_read_aloud, s, count=1)
+    if count != 1:
+        raise SystemExit("Upstream changed: could not locate selection annotation container structurally")
 f.write_text(s)
 
 # Event service: arm tap-to-start and emit a collapsed CFI range.
@@ -125,7 +152,7 @@ methods=r'''  getTtsChunksFromSelectionStart(selection: TextSelection, maxChars 
   }
 
   getSectionCount(): number {
-    return Math.max(0, this.getSectionFractions().length - 1);
+    return this.view?.book?.sections?.length ?? this.view?.book?.spine?.length ?? 0;
   }
 
   armTtsTapAnchor(): void { this.eventService.armTtsTapAnchor(); }
