@@ -389,4 +389,94 @@ css=r'''/* Grimmory Piper TTS */
 s=append_once(s,"Grimmory Piper TTS",css)
 f.write_text(s)
 
+
+# ---------------------------------------------------------------------------
+# Fix Foliate touch navigation in scrolled reading mode.
+#
+# Older Foliate builds still run their horizontal swipe/page snap handler
+# after a normal vertical scroll. A little horizontal finger drift can then
+# jump the reader forward/backward. Newer Foliate exits its touch navigation
+# handlers entirely while `scrolled` is active.
+# ---------------------------------------------------------------------------
+
+paginator_candidates = [
+    candidate
+    for candidate in ROOT.rglob("paginator.js")
+    if "node_modules" not in candidate.parts
+]
+
+paginator = None
+for candidate in paginator_candidates:
+    candidate_text = candidate.read_text(errors="ignore")
+    if (
+        "#onTouchStart" in candidate_text
+        and "#onTouchMove" in candidate_text
+        and "#onTouchEnd" in candidate_text
+        and "#touchScrolled" in candidate_text
+    ):
+        paginator = candidate
+        break
+
+if paginator is None:
+    raise SystemExit(
+        "Could not find Grimmory's Foliate paginator.js; "
+        "cannot apply scrolled touch fix."
+    )
+
+foliate = paginator.read_text()
+
+# Fix touchmove. In scrolled mode the browser should own the gesture.
+move_start = foliate.find("#onTouchMove")
+move_end = foliate.find("#onTouchEnd", move_start)
+
+if move_start == -1 or move_end == -1:
+    raise SystemExit("Could not locate Foliate touchmove/touchend handlers.")
+
+move_block = foliate[move_start:move_end]
+
+if "this.scrolled" not in move_block:
+    pinched_line = "state.pinched = globalThis.visualViewport.scale > 1"
+
+    if pinched_line not in move_block:
+        raise SystemExit(
+            "Foliate touchmove handler changed; "
+            "could not find visualViewport pinch check."
+        )
+
+    foliate = foliate.replace(
+        pinched_line,
+        pinched_line + "\n        if (this.scrolled || state.pinched) return",
+        1,
+    )
+
+# Fix touchend. This is the critical part that prevents the post-scroll
+# horizontal snap/page-navigation jump.
+end_start = foliate.find("#onTouchEnd")
+end_search_end = foliate.find("\n    //", end_start)
+if end_search_end == -1:
+    end_search_end = min(len(foliate), end_start + 1000)
+
+end_block = foliate[end_start:end_search_end]
+
+if "if (this.scrolled) return" not in end_block:
+    touch_reset = "this.#touchScrolled = false"
+
+    reset_pos = foliate.find(touch_reset, end_start, end_search_end)
+    if reset_pos == -1:
+        raise SystemExit(
+            "Foliate touchend handler changed; "
+            "could not find touch scroll reset."
+        )
+
+    insert_at = reset_pos + len(touch_reset)
+    foliate = (
+        foliate[:insert_at]
+        + "\n        if (this.scrolled) return"
+        + foliate[insert_at:]
+    )
+
+paginator.write_text(foliate)
+print(f"Applied scrolled touch-navigation fix to {paginator.relative_to(ROOT)}")
+
+
 print("Applied Grimmory v3.4.1 Piper TTS customizations")
