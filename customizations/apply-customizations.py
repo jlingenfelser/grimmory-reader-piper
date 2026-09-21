@@ -393,10 +393,9 @@ f.write_text(s)
 # ---------------------------------------------------------------------------
 # Fix Foliate touch navigation in scrolled reading mode.
 #
-# Older Foliate builds still run their horizontal swipe/page snap handler
-# after a normal vertical scroll. A little horizontal finger drift can then
-# jump the reader forward/backward. Newer Foliate exits its touch navigation
-# handlers entirely while `scrolled` is active.
+# In scrolled mode, let the browser own touch scrolling completely.
+# Foliate must not interpret the same gesture as horizontal page navigation
+# when the finger is released.
 # ---------------------------------------------------------------------------
 
 paginator_candidates = [
@@ -406,77 +405,92 @@ paginator_candidates = [
 ]
 
 paginator = None
+
 for candidate in paginator_candidates:
     candidate_text = candidate.read_text(errors="ignore")
-    if (
-        "#onTouchStart" in candidate_text
-        and "#onTouchMove" in candidate_text
-        and "#onTouchEnd" in candidate_text
-        and "#touchScrolled" in candidate_text
-    ):
+
+    if "#onTouchMove" in candidate_text and "#onTouchEnd" in candidate_text:
         paginator = candidate
         break
 
 if paginator is None:
     raise SystemExit(
-        "Could not find Grimmory's Foliate paginator.js; "
-        "cannot apply scrolled touch fix."
+        "Could not find Grimmory's Foliate paginator.js."
     )
 
 foliate = paginator.read_text()
 
-# Fix touchmove. In scrolled mode the browser should own the gesture.
-move_start = foliate.find("#onTouchMove")
-move_end = foliate.find("#onTouchEnd", move_start)
 
-if move_start == -1 or move_end == -1:
-    raise SystemExit("Could not locate Foliate touchmove/touchend handlers.")
+def add_scrolled_guard(source: str, handler: str) -> str:
+    """
+    Insert a guard directly after the opening line of a private
+    Foliate touch handler.
 
-move_block = foliate[move_start:move_end]
+    This deliberately avoids matching the implementation inside the
+    handler because different Foliate revisions implement the gesture
+    logic differently.
+    """
 
-if "this.scrolled" not in move_block:
-    pinched_line = "state.pinched = globalThis.visualViewport.scale > 1"
+    guard = "if (this.getAttribute('flow') === 'scrolled') return"
 
-    if pinched_line not in move_block:
+    lines = source.splitlines(keepends=True)
+
+    handler_line = None
+
+    for i, line in enumerate(lines):
+        if handler in line:
+            handler_line = i
+            break
+
+    if handler_line is None:
         raise SystemExit(
-            "Foliate touchmove handler changed; "
-            "could not find visualViewport pinch check."
+            f"Could not find Foliate handler {handler}."
         )
 
-    foliate = foliate.replace(
-        pinched_line,
-        pinched_line + "\n        if (this.scrolled || state.pinched) return",
-        1,
-    )
+    # Find the line that actually opens the method body.
+    # Usually this is the same line, but this also supports multiline
+    # method declarations.
+    open_line = None
 
-# Fix touchend. This is the critical part that prevents the post-scroll
-# horizontal snap/page-navigation jump.
-end_start = foliate.find("#onTouchEnd")
-end_search_end = foliate.find("\n    //", end_start)
-if end_search_end == -1:
-    end_search_end = min(len(foliate), end_start + 1000)
+    for i in range(handler_line, min(handler_line + 10, len(lines))):
+        if lines[i].rstrip().endswith("{"):
+            open_line = i
+            break
 
-end_block = foliate[end_start:end_search_end]
-
-if "if (this.scrolled) return" not in end_block:
-    touch_reset = "this.#touchScrolled = false"
-
-    reset_pos = foliate.find(touch_reset, end_start, end_search_end)
-    if reset_pos == -1:
+    if open_line is None:
         raise SystemExit(
-            "Foliate touchend handler changed; "
-            "could not find touch scroll reset."
+            f"Could not find opening brace for Foliate handler {handler}."
         )
 
-    insert_at = reset_pos + len(touch_reset)
-    foliate = (
-        foliate[:insert_at]
-        + "\n        if (this.scrolled) return"
-        + foliate[insert_at:]
+    # Already patched?
+    nearby = "".join(lines[open_line + 1:open_line + 5])
+
+    if guard in nearby:
+        return source
+
+    method_indent = lines[open_line][
+        :len(lines[open_line]) - len(lines[open_line].lstrip())
+    ]
+
+    body_indent = method_indent + "    "
+
+    lines.insert(
+        open_line + 1,
+        body_indent + guard + "\n"
     )
+
+    return "".join(lines)
+
+
+foliate = add_scrolled_guard(foliate, "#onTouchMove")
+foliate = add_scrolled_guard(foliate, "#onTouchEnd")
 
 paginator.write_text(foliate)
-print(f"Applied scrolled touch-navigation fix to {paginator.relative_to(ROOT)}")
+
+print(
+    f"Applied scrolled touch-navigation fix to "
+    f"{paginator.relative_to(ROOT)}"
+)
 
 
 print("Applied Grimmory v3.4.1 Piper TTS customizations")
