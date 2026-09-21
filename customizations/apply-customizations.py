@@ -22,14 +22,15 @@ def append_once(text, marker, block):
     return text if marker in text else text.rstrip()+"\n\n"+block.strip()+"\n"
 
 # Browser Piper dependency. The CI workflow refreshes pnpm-lock.yaml after this change.
-pkgf=p("frontend/package.json")
-pkg=json.loads(pkgf.read_text())
-pkg.setdefault("dependencies",{})["piper-tts-web"]="1.1.2"
-pkgf.write_text(json.dumps(pkg,indent=2)+"\\n")
-# piper-tts-web 1.1.2 does not ship TypeScript declarations.
-# Grimmory's tsconfig.app.json includes src/**/*.d.ts, so provide a local shim.
+pkgf = p("frontend/package.json")
+pkg = json.loads(pkgf.read_text())
+pkg.setdefault("dependencies", {})["piper-tts-web"] = "1.1.2"
+pkgf.write_text(json.dumps(pkg, indent=2) + chr(10))
+
+# piper-tts-web 1.1.2 does not provide TypeScript declarations.
+# Grimmory includes src/**/*.d.ts, so provide a local declaration shim.
 piper_types = FRONTEND / "src" / "piper-tts-web.d.ts"
-piper_types.write_text("declare module 'piper-tts-web';\\n")
+piper_types.write_text("declare module 'piper-tts-web';" + chr(10))
 
 # Browser-local Piper needs its WASM/runtime files copied into Angular's public tree.
 # Grimmory's angular.json already copies frontend/public/** into the final application.
